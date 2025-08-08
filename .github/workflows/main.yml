@@ -9,10 +9,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout
+    - name: 📦 Checkout
       uses: actions/checkout@v4
 
-    - name: Install Dependencies
+    - name: 🛠️ Install Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -21,102 +21,103 @@ jobs:
           squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven \
           libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl \
           libxml-simple-perl bc libc6-dev-i386 libx11-dev lib32z-dev \
-          libgl1-mesa-dev xsltproc unzip device-tree-compiler libelf-dev libncurses-dev
+          libgl1-mesa-dev xsltproc unzip device-tree-compiler libelf-dev libncurses-dev aria2
 
-    - name: Download Toolchains
+    - name: ⚙️ Setup swap 20G
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 20
+
+    - name: 📈 Tune Swap
       run: |
-        # Create a directory for all toolchains
-        mkdir -p $GITHUB_WORKSPACE/toolchains
-        cd $GITHUB_WORKSPACE/toolchains
+        echo "vm.swappiness=80" | sudo tee -a /etc/sysctl.conf
+        sudo sysctl -p
 
-        # Download AOSP Clang r383902 (from android11-release)
-        echo "Downloading AOSP Clang..."
-        mkdir clang-aosp
-        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android11-release/clang-r383902.tar.gz
-        tar -C clang-aosp/ -zxf clang-r383902.tar.gz
-
-        # Download AOSP GCC 64-bit
-        echo "Downloading AOSP GCC 64-bit..."
-        mkdir gcc-64
-        wget -q -O gcc-aarch64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
-        tar -C gcc-64/ -zxf gcc-aarch64.tar.gz
-
-        # Download AOSP GCC 32-bit
-        echo "Downloading AOSP GCC 32-bit..."
-        mkdir gcc-32
-        wget -q -O gcc-arm.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
-        tar -C gcc-32/ -zxf gcc-arm.tar.gz
-
-    - name: Clone kernel source
+    - name: ✨ Get Toolchain
       run: |
-        # Mengubah perintah clone agar nama direktorinya konsisten
-        git clone --recursive --branch zephyr --depth=1 https://github.com/topnotchfreaks/kernel_msm-5.15.git android_kernel_chopin_android_T
+        set -e
+            
+        clang_url="https://github.com/greenforce-project/greenforce_clang/releases/download/13072025/greenforce-clang-21.0.0git-13072025.tar.gz"
+        echo "✅ Clang URL: $clang_url"
+            
+        mkdir -p clang
+        echo "🚀 Downloading Greenforce Clang..."
+        aria2c -x 16 -s 16 --file-allocation=none --dir=clang --out=clang.tar.gz "$clang_url" || { echo "❌ Failed to download Clang!"; exit 1; }
+            
+        echo "📦 Extracting Clang..."
+        tar -xf clang/clang.tar.gz -C clang || { echo "❌ Extraction failed!"; exit 1; }
+        rm -f clang/clang.tar.gz
 
-    - name: Build Kernel
+        if [ -d "clang/bin" ]; then
+          CLANG_PATH="${{ github.workspace }}/clang/bin"
+        else
+          CLANG_PATH=$(find clang -type d -name "bin" | head -n 1)
+          CLANG_PATH="${{ github.workspace }}/${CLANG_PATH}"
+        fi
+            
+        if [ ! -f "$CLANG_PATH/clang" ]; then
+          echo "❌ Clang binary not found in $CLANG_PATH! Build might fail."
+          ls -R clang
+          exit 1
+        fi
+            
+        echo "✅ Using Clang from $CLANG_PATH"
+        echo "CLANG_PATH=$CLANG_PATH" >> $GITHUB_ENV
+        echo "$CLANG_PATH" >> $GITHUB_PATH
+            
+        export PATH="$CLANG_PATH:$PATH"
+        export CLANG_TRIPLE="aarch64-linux-gnu-"
+        export CC=clang
+        export AR="llvm-ar"
+        export AS="llvm-as"
+        export NM="llvm-nm"
+        export OBJCOPY="llvm-objcopy"
+        export OBJDUMP="llvm-objdump"
+        export STRIP="llvm-strip"
+            
+        echo "⚙️ Using Clang version:"
+        clang --version || echo "❌ Clang not found in PATH!"
+
+    - name: 📚 Clone kernel source
       run: |
-        # Set environment variables for the build
+        git clone --recursive --branch zephyr --depth=1 https://github.com/topnotchfreaks/kernel_msm-5.15.git
+
+    - name: 🏗️ Build Kernel
+      run: |
         export KBUILD_BUILD_USER="GitHub"
         export KBUILD_BUILD_HOST="Actions"
         export ARCH=arm64
-        export PATH="$GITHUB_WORKSPACE/toolchains/clang-aosp/bin:$PATH"
         
-        # Change to kernel source directory
-        cd android_kernel_chopin_android_T
+        cd kernel_msm-5.15
 
-        # 1. (Opsional tapi direkomendasikan) Membersihkan output directory untuk memastikan build yang bersih
-        #make O=out mrproper
+        make O=out \
+            LLVM=1 \
+            LTO=thin \
+            -j$(nproc) \
+            gki_defconfig
 
-        # 2. 【Langkah Utama】Menyiapkan konfigurasi build
-        # Ini adalah langkah yang hilang dari kode Anda. Anda harus menyediakan file defconfig Anda di dalam repositori
-        # atau menambahkan langkah untuk menyalinnya ke direktori kerja sebelum langkah 'make gki_defconfig'.
-        # Contoh:
-        # cp arch/arm64/configs/chopin_defconfig out/.config
-        # make -j$(nproc) O=out ARCH=arm64 gki_defconfig
+        make O=out \
+            LLVM=1 \
+            LTO=thin \
+            -j$(nproc)
 
-        # Perintah 'make gki_defconfig' akan mengeksekusi konfigurasi yang ada.
-        make -j$(nproc) O=out \
-             CC=clang \
-             CLANG_TRIPLE=aarch64-linux-gnu- \
-             CROSS_COMPILE="$GITHUB_WORKSPACE/toolchains/gcc-64/bin/aarch64-linux-android-" \
-             CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/toolchains/gcc-32/bin/arm-linux-androideabi-" \
-             LD=ld.lld \
-             gki_defconfig
-
-        # 4. Sekarang, langsung mulai kompilasi
-        make -j$(nproc) O=out \
-             CC=clang \
-             CLANG_TRIPLE=aarch64-linux-gnu- \
-             CROSS_COMPILE="$GITHUB_WORKSPACE/toolchains/gcc-64/bin/aarch64-linux-android-" \
-             CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/toolchains/gcc-32/bin/arm-linux-androideabi-" \
-             LD=ld.lld
-             
-    - name: Build Custom Kernel Module
+    - name: 📦 Build Custom Kernel Module
       run: |
-        # Set the same environment variables as the kernel build
         export KBUILD_BUILD_USER="GitHub"
         export KBUILD_BUILD_HOST="Actions"
         export ARCH=arm64
-        export PATH="$GITHUB_WORKSPACE/toolchains/clang-aosp/bin:$PATH"
 
-        # Build the external module
-        # -C: Menunjuk ke direktori sumber kernel
-        # M=: Menunjuk ke direktori sumber modul
-        make -j$(nproc) -C android_kernel_chopin_android_T/out \
+        make -j$(nproc) -C kernel_msm-5.15/out \
              M=$GITHUB_WORKSPACE/kernel \
-             CC=clang \
-             CLANG_TRIPLE=aarch64-linux-gnu- \
-             CROSS_COMPILE="$GITHUB_WORKSPACE/toolchains/gcc-64/bin/aarch64-linux-android-" \
-             CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/toolchains/gcc-32/bin/arm-linux-androideabi-" \
-             LD=ld.lld \
              modules
 
-    - name: Upload Kernel Image
+    - name: 📤 Upload Kernel Image
       uses: actions/upload-artifact@v4
       with:
         name: Kernel-Image-chopin
-        path: android_kernel_chopin_android_T/out/arch/arm64/boot/Image.gz
-
-    - name: Upload Kernel Module
+        path: kernel_msm-5.15/out/arch/arm64/boot/Image.gz
+        
+    - name: 📤 Upload Kernel Module
       uses: actions/upload-artifact@v4
       with:
         name: Kernel-Module-khack
