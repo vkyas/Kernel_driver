@@ -49,7 +49,8 @@ jobs:
 
     - name: Clone kernel source
       run: |
-        git clone --recursive --branch zephyr --depth=1 https://github.com/topnotchfreaks/kernel_msm-5.15.git
+        # Mengubah perintah clone agar nama direktorinya konsisten
+        git clone --recursive --branch zephyr --depth=1 https://github.com/topnotchfreaks/kernel_msm-5.15.git android_kernel_chopin_android_T
 
     - name: Build Kernel
       run: |
@@ -62,14 +63,17 @@ jobs:
         # Change to kernel source directory
         cd android_kernel_chopin_android_T
 
-        # 1. (可选但推荐) 清理输出目录，确保一个干净的开始
+        # 1. (Opsional tapi direkomendasikan) Membersihkan output directory untuk memastikan build yang bersih
         #make O=out mrproper
 
-        # 2. 【核心步骤】将你的自定义配置文件复制到输出目录并重命名为 .config
-        
+        # 2. 【Langkah Utama】Menyiapkan konfigurasi build
+        # Ini adalah langkah yang hilang dari kode Anda. Anda harus menyediakan file defconfig Anda di dalam repositori
+        # atau menambahkan langkah untuk menyalinnya ke direktori kerja sebelum langkah 'make gki_defconfig'.
+        # Contoh:
+        # cp arch/arm64/configs/chopin_defconfig out/.config
+        # make -j$(nproc) O=out ARCH=arm64 gki_defconfig
 
-        # 3. (可选但推荐) 基于你的 .config 文件，为任何新增的内核选项生成默认值
-        #    这可以防止编译过程中出现交互式提示，导致 CI 卡住
+        # Perintah 'make gki_defconfig' akan mengeksekusi konfigurasi yang ada.
         make -j$(nproc) O=out \
              CC=clang \
              CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -78,13 +82,14 @@ jobs:
              LD=ld.lld \
              gki_defconfig
 
-        # 4. 现在，直接开始编译。make 会自动使用 out/.config 文件
+        # 4. Sekarang, langsung mulai kompilasi
         make -j$(nproc) O=out \
              CC=clang \
              CLANG_TRIPLE=aarch64-linux-gnu- \
              CROSS_COMPILE="$GITHUB_WORKSPACE/toolchains/gcc-64/bin/aarch64-linux-android-" \
              CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/toolchains/gcc-32/bin/arm-linux-androideabi-" \
              LD=ld.lld
+             
     - name: Build Custom Kernel Module
       run: |
         # Set the same environment variables as the kernel build
@@ -94,9 +99,8 @@ jobs:
         export PATH="$GITHUB_WORKSPACE/toolchains/clang-aosp/bin:$PATH"
 
         # Build the external module
-        # -C: 指向内核源码的输出目录 (O=out)
-        # M=: 指向你的模块源码目录 (包含 Makefile 的地方)
-        # modules: 是构建模块的目标
+        # -C: Menunjuk ke direktori sumber kernel
+        # M=: Menunjuk ke direktori sumber modul
         make -j$(nproc) -C android_kernel_chopin_android_T/out \
              M=$GITHUB_WORKSPACE/kernel \
              CC=clang \
@@ -111,9 +115,9 @@ jobs:
       with:
         name: Kernel-Image-chopin
         path: android_kernel_chopin_android_T/out/arch/arm64/boot/Image.gz
+
     - name: Upload Kernel Module
       uses: actions/upload-artifact@v4
       with:
         name: Kernel-Module-khack
-        # 编译后的 .ko 文件会生成在你的模块源码目录中
         path: kernel/khack.ko
