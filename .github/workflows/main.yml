@@ -109,6 +109,14 @@ jobs:
 
         make -j$(nproc) -C kernel_msm-5.15/out \
              M=$GITHUB_WORKSPACE/kernel \
+             LLVM=1 \
+             LTO=thin \
+             CC=clang \
+             AR=llvm-ar \
+             NM=llvm-nm \
+             OBJCOPY=llvm-objcopy \
+             OBJDUMP=llvm-objdump \
+             STRIP=llvm-strip \
              modules
 
     - name: 📤 Upload Kernel Image
