@@ -1,0 +1,156 @@
+name: "Build kernels"
+
+env:
+  OUT_DIR: "out"
+  KERNEL_VERSION: "5.15"
+  ANDROID_VERSION: "13"
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelSourceURL:
+        description: "Kernel source URL"
+        required: true
+        type: string
+        default: "https://github.com/topnotchfreaks/kernel_msm-5.15"
+      kernelBranch:
+        description: "Kernel branch"
+        required: false
+        type: string
+        default: "zephyr"
+      kernelDevice:
+        description: "Device (used for defconfig)"
+        required: true
+        type: string
+        default: "gki"
+      localVersion:
+        description: "Custom localversion name (e.g., -mybuild)"
+        required: false
+        type: string
+        default: ""
+      buildKSU:
+        description: "Build KSU variant?"
+        required: false
+        type: boolean
+        default: true
+      ltoMode:
+        description: "Choose LTO mode"
+        required: true
+        default: "thin"
+        type: choice
+        options:
+          - "thin"
+          - "full"
+
+jobs:
+  Build-Kernel:
+    name: "🚀 Build Kernel"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant: ["ksu"]
+    env:
+      kernelDir: common_${{ github.event.inputs.kernelDevice }}
+      kernelName: common
+      DEFCONFIG_NAME: ${{ github.event.inputs.kernelDevice }}_defconfig
+      WORK_DIR: ${{ github.workspace }}
+
+    steps:
+      - name: "✨ Setup workspace"
+        run: |
+          mkdir -p $kernelDir
+          echo "BUILD_TIME=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+          sudo apt-get update -qq
+          sudo apt-get install -y repo rsync aria2
+          if [ "${{ github.event.inputs.ltoMode }}" = "full" ]; then
+            SWAP_SIZE=8G
+          else
+            SWAP_SIZE=4G
+          fi
+          sudo fallocate -l $SWAP_SIZE /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+      - name: "🌟 Clone kernel source"
+        working-directory: ./${{ env.kernelDir }}
+        run: |
+          git clone --recursive --branch ${{ github.event.inputs.kernelBranch }} \
+            ${{ github.event.inputs.kernelSourceURL }} ${{ env.kernelName }} --depth=1
+
+      - name: "📥 Initialize repo"
+        working-directory: ${{ env.WORK_DIR}}
+        run: |
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android13-5.15-lts --depth=1
+          repo sync --optimized-fetch --prune --no-clone-bundle --no-tags -j$(nproc --all)
+          rm -rf .repo common
+          aria2c -x 16 -s 16 -o prebuilts/clang/host/linux-x86/clang-r547379.tar.gz \
+            "https://github.com/topnotchfreaks/clang/releases/download/v1.0.0/clang-r547379.tar.gz"
+          mkdir -p prebuilts/clang/host/linux-x86/clang-r547379
+          tar -xzf prebuilts/clang/host/linux-x86/clang-r547379.tar.gz -C prebuilts/clang/host/linux-x86/clang-r547379
+          rm -f prebuilts/clang/host/linux-x86/clang-r547379.tar.gz
+
+      - name: "⚙️ Configure kernel"
+        working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }}
+        run: |
+          CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
+          if [ -n "${{ github.event.inputs.localVersion }}" ]; then
+            echo "CONFIG_LOCALVERSION=\"${{ github.event.inputs.localVersion }}\"" >> "$CONFIG_FILE"
+          fi
+          echo "CONFIG_KALLSYMS=y" >> "$CONFIG_FILE"
+
+      - name: "🛠 Apply kernel patches"
+        working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }}
+        run: |
+          curl -L -o lineage.patch "https://raw.githubusercontent.com/topnotchfreaks/kernel_patches/main/0001-fs-lineageos-disguise.patch"
+          patch -p1 < lineage.patch || true
+
+      - name: "🔧 Setup KernelSU"
+        working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }}
+        run: |
+          rm -rf ./KernelSU ./drivers/kernelsu
+          curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
+          CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
+          echo "CONFIG_KSU=y" >> "$CONFIG_FILE"
+
+      - name: "🔨 Build kernel"
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          LTO=${{ github.event.inputs.ltoMode }} \
+          BUILD_CONFIG=${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki.aarch64 \
+          build/build.sh -j$(nproc --all)
+
+      - name: "📦 Build Custom Kernel Module"
+        run: |
+          export KBUILD_BUILD_USER="GitHub"
+          export KBUILD_BUILD_HOST="Actions"
+          export ARCH=arm64
+          make -j$(nproc) -C kernel_msm-5.15/out \
+               M=$GITHUB_WORKSPACE/kernel \
+               LLVM=1 \
+               LTO=thin \
+               CC=clang \
+               AR=llvm-ar \
+               NM=llvm-nm \
+               OBJCOPY=llvm-objcopy \
+               OBJDUMP=llvm-objdump \
+               STRIP=llvm-strip \
+               modules
+
+      - name: "📤 Upload Kernel Module"
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-Module-khack
+          path: kernel/kamid.ko
+
+      - name: "📦 Prepare artifact"
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          cp out/dist/Image Image.ksu
+
+      - name: "📤 Upload kernel"
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-ksu
+          path: ${{ env.WORK_DIR }}/Image.ksu
+          retention-days: 3
