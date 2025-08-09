@@ -1,257 +1,96 @@
-#include "memory.h"
-#include <linux/tty.h>
-#include <linux/io.h>
 #include <linux/mm.h>
-#include <linux/slab.h>
+#include <linux/sched.h>
 #include <linux/uaccess.h>
-#include <linux/version.h>
+#include <linux/highmem.h>
+#include <linux/mmap_lock.h>
+#include <linux/sched/mm.h>
+#include <linux/sched/signal.h>
+#include <linux/pagemap.h>
+#include "memory.h"
 
-#include <asm/cpu.h>
-#include <asm/io.h>
-#include <asm/page.h>
-#include <asm/pgtable.h>
+#define MAX_BATCH 16
 
-extern struct mm_struct *get_task_mm(struct task_struct *task);
-
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 61))
-extern void mmput(struct mm_struct *);
-
-phys_addr_t translate_linear_address(struct mm_struct *mm, uintptr_t va)
+static inline bool _access_process_memory(pid_t pid, uintptr_t addr,
+                                          void *buffer, size_t size,
+                                          bool write)
 {
+    struct task_struct *task;
+    struct mm_struct *mm;
+    struct page *pages[MAX_BATCH];
+    unsigned long offset, copied = 0;
+    int pinned, i;
+    void *kaddr;
 
-	pgd_t *pgd;
-	p4d_t *p4d;
-	pmd_t *pmd;
-	pte_t *pte;
-	pud_t *pud;
+    task = get_pid_task(find_get_pid(pid), PIDTYPE_PID);
+    if (unlikely(!task))
+        return false;
 
-	phys_addr_t page_addr;
-	uintptr_t page_offset;
+    mm = get_task_mm(task);
+    if (unlikely(!mm)) {
+        put_task_struct(task);
+        return false;
+    }
 
-	pgd = pgd_offset(mm, va);
-	if (pgd_none(*pgd) || pgd_bad(*pgd))
-	{
-		return 0;
-	}
-	p4d = p4d_offset(pgd, va);
-	if (p4d_none(*p4d) || p4d_bad(*p4d))
-	{
-		return 0;
-	}
-	pud = pud_offset(p4d, va);
-	if (pud_none(*pud) || pud_bad(*pud))
-	{
-		return 0;
-	}
-	pmd = pmd_offset(pud, va);
-	if (pmd_none(*pmd))
-	{
-		return 0;
-	}
-	pte = pte_offset_kernel(pmd, va);
-	if (pte_none(*pte))
-	{
-		return 0;
-	}
-	if (!pte_present(*pte))
-	{
-		return 0;
-	}
-	// 页物理地址
-	page_addr = (phys_addr_t)(pte_pfn(*pte) << PAGE_SHIFT);
-	// 页内偏移
-	page_offset = va & (PAGE_SIZE - 1);
+    mmap_read_lock(mm);
 
-	return page_addr + page_offset;
-}
-#else
-phys_addr_t translate_linear_address(struct mm_struct *mm, uintptr_t va)
-{
+    while (copied < size) {
+        unsigned long len = min_t(size_t, size - copied,
+                                  PAGE_SIZE - (addr + copied) % PAGE_SIZE);
+        unsigned long start = addr + copied;
 
-	pgd_t *pgd;
-	pmd_t *pmd;
-	pte_t *pte;
-	pud_t *pud;
+        pinned = pin_user_pages_remote(mm, start,
+                                       min_t(size_t, MAX_BATCH,
+                                             (size - copied + PAGE_SIZE - 1) >> PAGE_SHIFT),
+                                       write ? FOLL_WRITE : 0,
+                                       pages, NULL, NULL);
+        if (unlikely(pinned <= 0))
+            goto unlock_fail;
 
-	phys_addr_t page_addr;
-	uintptr_t page_offset;
+        for (i = 0; i < pinned; i++) {
+            offset = start % PAGE_SIZE;
+            len = min(len, PAGE_SIZE - offset);
 
-	pgd = pgd_offset(mm, va);
-	if (pgd_none(*pgd) || pgd_bad(*pgd))
-	{
-		return 0;
-	}
-	pud = pud_offset(pgd, va);
-	if (pud_none(*pud) || pud_bad(*pud))
-	{
-		return 0;
-	}
-	pmd = pmd_offset(pud, va);
-	if (pmd_none(*pmd))
-	{
-		return 0;
-	}
-	pte = pte_offset_kernel(pmd, va);
-	if (pte_none(*pte))
-	{
-		return 0;
-	}
-	if (!pte_present(*pte))
-	{
-		return 0;
-	}
-	// 页物理地址
-	page_addr = (phys_addr_t)(pte_pfn(*pte) << PAGE_SHIFT);
-	// 页内偏移
-	page_offset = va & (PAGE_SIZE - 1);
+            kaddr = kmap_local_page(pages[i]);
+            if (write) {
+                if (copy_from_user(kaddr + offset, buffer + copied, len)) {
+                    kunmap_local(kaddr);
+                    unpin_user_pages_dirty_lock(pages, i + 1, true);
+                    goto unlock_fail;
+                }
+                set_page_dirty_lock(pages[i]);
+            } else {
+                if (copy_to_user(buffer + copied, kaddr + offset, len)) {
+                    kunmap_local(kaddr);
+                    unpin_user_pages_dirty_lock(pages, i + 1, false);
+                    goto unlock_fail;
+                }
+            }
+            kunmap_local(kaddr);
+            start += len;
+            copied += len;
+            len = min_t(size_t, size - copied, PAGE_SIZE);
+        }
+        unpin_user_pages_dirty_lock(pages, pinned, write);
+    }
 
-	return page_addr + page_offset;
-}
-#endif
+    mmap_read_unlock(mm);
+    mmput(mm);
+    put_task_struct(task);
+    return true;
 
-#ifndef ARCH_HAS_VALID_PHYS_ADDR_RANGE
-static inline int valid_phys_addr_range(phys_addr_t addr, size_t count)
-{
-	return addr + count <= __pa(high_memory);
-}
-#endif
-
-bool read_physical_address(phys_addr_t pa, void *buffer, size_t size)
-{
-	void *mapped;
-
-	if (!pfn_valid(__phys_to_pfn(pa)))
-	{
-		return false;
-	}
-	if (!valid_phys_addr_range(pa, size))
-	{
-		return false;
-	}
-	mapped = ioremap_cache(pa, size);
-	if (!mapped)
-	{
-		return false;
-	}
-	if (copy_to_user(buffer, mapped, size))
-	{
-		iounmap(mapped);
-		return false;
-	}
-	iounmap(mapped);
-	return true;
+unlock_fail:
+    mmap_read_unlock(mm);
+    mmput(mm);
+    put_task_struct(task);
+    return false;
 }
 
-bool write_physical_address(phys_addr_t pa, void *buffer, size_t size)
+bool read_process_memory(pid_t pid, uintptr_t addr, void *buffer, size_t size)
 {
-	void *mapped;
-
-	if (!pfn_valid(__phys_to_pfn(pa)))
-	{
-		return false;
-	}
-	if (!valid_phys_addr_range(pa, size))
-	{
-		return false;
-	}
-	mapped = ioremap_cache(pa, size);
-	if (!mapped)
-	{
-		return false;
-	}
-	if (copy_from_user(mapped, buffer, size))
-	{
-		iounmap(mapped);
-		return false;
-	}
-	iounmap(mapped);
-	return true;
+    return _access_process_memory(pid, addr, buffer, size, false);
 }
 
-bool read_process_memory(
-	pid_t pid,
-	uintptr_t addr,
-	void *buffer,
-	size_t size)
+bool write_process_memory(pid_t pid, uintptr_t addr, void *buffer, size_t size)
 {
-
-	struct task_struct *task;
-	struct mm_struct *mm;
-	struct pid *pid_struct;
-	phys_addr_t pa;
-	bool result = false;
-
-	pid_struct = find_get_pid(pid);
-	if (!pid_struct)
-	{
-		return false;
-	}
-	task = get_pid_task(pid_struct, PIDTYPE_PID);
-	if (!task)
-	{
-		return false;
-	}
-	mm = get_task_mm(task);
-	if (!mm)
-	{
-		return false;
-	}
-
-	pa = translate_linear_address(mm, addr);
-	if (pa)
-	{
-		result = read_physical_address(pa, buffer, size);
-	}
-	else
-	{
-		if (find_vma(mm, addr))
-		{
-			if (clear_user(buffer, size) == 0)
-			{
-				result = true;
-			}
-		}
-	}
-
-	mmput(mm);
-	return result;
-}
-
-bool write_process_memory(
-	pid_t pid,
-	uintptr_t addr,
-	void *buffer,
-	size_t size)
-{
-
-	struct task_struct *task;
-	struct mm_struct *mm;
-	struct pid *pid_struct;
-	phys_addr_t pa;
-	bool result = false;
-
-	pid_struct = find_get_pid(pid);
-	if (!pid_struct)
-	{
-		return false;
-	}
-	task = get_pid_task(pid_struct, PIDTYPE_PID);
-	if (!task)
-	{
-		return false;
-	}
-	mm = get_task_mm(task);
-	if (!mm)
-	{
-		return false;
-	}
-
-	pa = translate_linear_address(mm, addr);
-	if (pa)
-	{
-		result = write_physical_address(pa, buffer, size);
-	}
-
-	mmput(mm);
-	return result;
+    return _access_process_memory(pid, addr, buffer, size, true);
 }
