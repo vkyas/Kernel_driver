@@ -1,4 +1,3 @@
-obj-m += khack.o
+obj-m += kamid.o
 
-
-khack-y := memory.o process.o entry.o
+kamid-y := entry.o memory.o process.o compat.o
