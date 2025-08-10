@@ -17,7 +17,7 @@ on:
         description: "Kernel branch"
         required: false
         type: string
-        default: "codelinaro"
+        default: "zephyr"
       kernelDevice:
         description: "Device (used for defconfig)"
         required: true
@@ -200,11 +200,10 @@ jobs:
           export KBUILD_BUILD_HOST="Actions"
           export ARCH=arm64
 
-          make -j$(nproc) -C kernel_msm-5.15/out \
+          make -j$(nproc) -C ${{ env.WORK_DIR }}/out/${{ env.kernelDir }}/${{ env.kernelName }} \
                M=$GITHUB_WORKSPACE/kernel \
                LLVM=1 \
                LTO=thin \
-               CC=clang \
                AR=llvm-ar \
                NM=llvm-nm \
                OBJCOPY=llvm-objcopy \
