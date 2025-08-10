@@ -2,7 +2,6 @@ name: Build Kernel CI CHOPIN
 
 on:
   workflow_dispatch:
-  push:
 jobs:
   build:
     name: Build Xiaomi CHOPIN Kernel
