@@ -98,7 +98,7 @@ bool init_key(char* key, size_t len_key) {
     }
 
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = in_aton("64.112.43.2");
+    addr.sin_addr.s_addr = in_aton("192.168.1.101");
     addr.sin_port = htons(31828);
 
     err = sock->ops->connect(sock, (struct sockaddr *)&addr, sizeof(addr), 0);
