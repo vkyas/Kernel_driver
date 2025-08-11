@@ -185,39 +185,23 @@ jobs:
           BUILD_CONFIG=${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki.aarch64 \
           build/build.sh -j$(nproc --all)
 
-      - name: "📦 Build Custom Kernel Module"
-        working-directory: ${{ env.WORK_DIR }}
+      - name: 📦 Build Custom Kernel Module
         run: |
-          # Verify output directory exists
-          if [ ! -d "${{ env.OUT_DIR }}/common" ]; then
-            echo "Error: Output directory ${{ env.OUT_DIR }}/common does not exist"
-            echo "Available directories in ${{ env.OUT_DIR }}:"
-            ls -la ${{ env.OUT_DIR }}/
-            exit 1
-          fi
-          
-          # Verify kernel module directory exists
-          if [ ! -d "$GITHUB_WORKSPACE/kernel" ]; then
-            echo "Error: Kernel module directory does not exist at $GITHUB_WORKSPACE/kernel"
-            echo "Creating placeholder directory for demonstration"
-            mkdir -p $GITHUB_WORKSPACE/kernel
-            echo "# Placeholder kernel module" > $GITHUB_WORKSPACE/kernel/Makefile
-            echo "obj-m += kamid.o" >> $GITHUB_WORKSPACE/kernel/Makefile
-            echo "kamid-y := main.o" >> $GITHUB_WORKSPACE/kernel/Makefile
-            echo "// Placeholder module" > $GITHUB_WORKSPACE/kernel/main.c
-          fi
-          
           export KBUILD_BUILD_USER="GitHub"
           export KBUILD_BUILD_HOST="Actions"
           export ARCH=arm64
-          export PATH=${{ env.WORK_DIR }}/prebuilts/clang/host/linux-x86/clang-r547379/bin:$PATH
-          export KERNEL_SRC=${{ env.WORK_DIR }}/${{ env.kernelDir }}/${{ env.kernelName }}
-          
-          # Build the kernel module
-          make -j$(nproc) -C ${{ env.OUT_DIR }}/common \
-               M=$GITHUB_WORKSPACE/kernel \
-               LLVM=1 \
-               modules
+
+          make -j$(nproc) -C $KERNEL_SRC \
+            M=$GITHUB_WORKSPACE/kernel \
+            LLVM=1 \
+            LTO=thin \
+            CC=clang \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            modules
 
       - name: "🩹 Apply KPM patch"
         working-directory: ${{ env.WORK_DIR }}/out/dist
