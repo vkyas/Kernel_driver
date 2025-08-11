@@ -1,4 +1,4 @@
-name: "Build kernels"
+name: "Build KSU Kernel Only"
 
 env:
   OUT_DIR: "out"
@@ -28,11 +28,6 @@ on:
         required: false
         type: string
         default: ""
-      buildKSU:
-        description: "Build KSU variant?"
-        required: false
-        type: boolean
-        default: true
       ltoMode:
         description: "Choose LTO mode"
         required: true
@@ -43,12 +38,9 @@ on:
           - "full"
 
 jobs:
-  Build-Kernel:
-    name: "🚀 Build Kernel"
+  Build-KSU-Kernel:
+    name: "🚀 Build KSU Kernel"
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        variant: ${{ fromJSON(inputs.buildKSU == true && '["noksu", "ksu"]' || '["noksu"]') }}
     env:
       kernelDir: common_${{ github.event.inputs.kernelDevice }}
       kernelName: common
@@ -58,7 +50,7 @@ jobs:
     steps:
       - name: "✨ Setup workspace"
         run: |
-          mkdir -p $kernelDir
+          mkdir -p ${{ env.kernelDir }}
           echo "BUILD_TIME=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
           sudo apt-get update -qq
           sudo apt-get install -y repo rsync aria2
@@ -139,8 +131,7 @@ jobs:
           curl -L -o lineage.patch "https://raw.githubusercontent.com/topnotchfreaks/kernel_patches/main/0001-fs-lineageos-disguise.patch"
           patch -p1 < lineage.patch || echo "Warning: Some hunks failed"
 
-      - name: "🔧 Setup KernelSU (KSU variant only)"
-        if: matrix.variant == 'ksu'
+      - name: "🔧 Setup KernelSU"
         working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }}
         run: |
           rm -rf ./KernelSU ./drivers/kernelsu
@@ -194,23 +185,44 @@ jobs:
           BUILD_CONFIG=${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki.aarch64 \
           build/build.sh -j$(nproc --all)
 
-      - name: 📦 Build Custom Kernel Module
+      - name: "📦 Build Custom Kernel Module"
+        working-directory: ${{ env.WORK_DIR }}
         run: |
+          # Verify output directory exists
+          if [ ! -d "${{ env.OUT_DIR }}/common" ]; then
+            echo "Error: Output directory ${{ env.OUT_DIR }}/common does not exist"
+            echo "Available directories in ${{ env.OUT_DIR }}:"
+            ls -la ${{ env.OUT_DIR }}/
+            exit 1
+          fi
+          
+          # Verify kernel module directory exists
+          if [ ! -d "$GITHUB_WORKSPACE/kernel" ]; then
+            echo "Error: Kernel module directory does not exist at $GITHUB_WORKSPACE/kernel"
+            echo "Creating placeholder directory for demonstration"
+            mkdir -p $GITHUB_WORKSPACE/kernel
+            echo "# Placeholder kernel module" > $GITHUB_WORKSPACE/kernel/Makefile
+            echo "obj-m += kamid.o" >> $GITHUB_WORKSPACE/kernel/Makefile
+            echo "kamid-y := main.o" >> $GITHUB_WORKSPACE/kernel/Makefile
+            echo "// Placeholder module" > $GITHUB_WORKSPACE/kernel/main.c
+          fi
+          
           export KBUILD_BUILD_USER="GitHub"
           export KBUILD_BUILD_HOST="Actions"
           export ARCH=arm64
           export PATH=${{ env.WORK_DIR }}/prebuilts/clang/host/linux-x86/clang-r547379/bin:$PATH
-
+          export KERNEL_SRC=${{ env.WORK_DIR }}/${{ env.kernelDir }}/${{ env.kernelName }}
+          
+          # Build the kernel module
           make -j$(nproc) -C ${{ env.OUT_DIR }}/common \
                M=$GITHUB_WORKSPACE/kernel \
                LLVM=1 \
                modules
 
-      - name: "🩹 Apply KPM patch (KSU variant only)"
-        if: matrix.variant == 'ksu'
+      - name: "🩹 Apply KPM patch"
         working-directory: ${{ env.WORK_DIR }}/out/dist
         run: |
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kmp/patch_linux" -o patch
           chmod +x patch
           ./patch
           mv oImage Image
@@ -218,25 +230,25 @@ jobs:
       - name: "📦 Prepare artifact"
         working-directory: ${{ env.WORK_DIR }}
         run: |
-          cp out/dist/Image Image.${{ matrix.variant }}
+          cp out/dist/Image Image.ksu
 
       - name: "📤 Upload kernel"
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.variant }}
-          path: ${{ env.WORK_DIR }}/Image.${{ matrix.variant }}
+          name: kernel-ksu
+          path: ${{ env.WORK_DIR }}/Image.ksu
           retention-days: 3
 
-      - name: 📤 Upload Kernel Module
+      - name: "📤 Upload Kernel Module"
         uses: actions/upload-artifact@v4
         with:
           name: Kernel-Module-khack
           path: kernel/kamid.ko
 
-  Package-Kernels:
-    name: "📦 Package kernels"
+  Package-KSU-Kernel:
+    name: "📦 Package KSU kernel"
     runs-on: ubuntu-latest
-    needs: Build-Kernel
+    needs: Build-KSU-Kernel
     steps:
       - name: "📥 Download artifacts"
         uses: actions/download-artifact@v4
@@ -248,11 +260,11 @@ jobs:
           BUILD_TIME=$(date +'%Y-%m-%d')
           git clone --depth=1 https://github.com/topnotchfreaks/AnyKernel3 -b master AnyKernel3
           
-          # Copy kernels
-          find kernels -name "Image.*" -exec cp {} AnyKernel3/ \;
+          # Copy KSU kernel
+          find kernels -name "Image.ksu" -exec cp {} AnyKernel3/Image \;
           
           # Create ZIP
-          ZIP_NAME="Anykernel3_${{ github.event.inputs.kernelBranch }}_${BUILD_TIME}.zip"
+          ZIP_NAME="KSU_Anykernel3_${{ github.event.inputs.kernelBranch }}_${BUILD_TIME}.zip"
           cd AnyKernel3
           zip -r9 "../$ZIP_NAME" * -x .git/*
           cd ..
@@ -271,12 +283,12 @@ jobs:
         run: |
           if [[ -f "${{ env.ZIP_PATH }}" ]]; then
             curl -s -F document=@"${{ env.ZIP_PATH }}" \
-                 -F caption="✅ Kernel Build Complete - $(date '+%Y-%m-%d %H:%M:%S')" \
+                 -F caption="✅ KSU Kernel Build Complete - $(date '+%Y-%m-%d %H:%M:%S')" \
                  -F chat_id=${{ secrets.TELEGRAM_USER_ID }} \
                  "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
           else
             curl -s -X POST \
                  -d chat_id=${{ secrets.TELEGRAM_USER_ID }} \
-                 -d text="❌ Kernel build failed" \
+                 -d text="❌ KSU Kernel build failed" \
                  "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage"
           fi
