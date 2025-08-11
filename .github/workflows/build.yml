@@ -185,7 +185,14 @@ jobs:
           BUILD_CONFIG=${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki.aarch64 \
           build/build.sh -j$(nproc --all)
 
-      - name: 📦 Build Custom Kernel Module
+      - name: "📥 Clone kernel module"
+        run: |
+          rm -rf $GITHUB_WORKSPACE/kernel
+          git clone --depth=1 https://github.com/vkyas/Kernel_driver.git temp_repo
+          mv temp_repo/kernel $GITHUB_WORKSPACE/kernel
+          rm -rf temp_repo
+
+      - name: "📦 Build Custom Kernel Module"
         run: |
           export KBUILD_BUILD_USER="GitHub"
           export KBUILD_BUILD_HOST="Actions"
