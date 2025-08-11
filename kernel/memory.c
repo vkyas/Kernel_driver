@@ -15,7 +15,9 @@ extern struct mm_struct *get_task_mm(struct task_struct *task);
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 61))
 extern void mmput(struct mm_struct *);
+#endif
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 61))
 phys_addr_t translate_linear_address(struct mm_struct *mm, uintptr_t va)
 {
 
@@ -57,9 +59,9 @@ phys_addr_t translate_linear_address(struct mm_struct *mm, uintptr_t va)
 	{
 		return 0;
 	}
-	
+	// 页物理地址
 	page_addr = (phys_addr_t)(pte_pfn(*pte) << PAGE_SHIFT);
-	
+	// 页内偏移
 	page_offset = va & (PAGE_SIZE - 1);
 
 	return page_addr + page_offset;
@@ -100,13 +102,22 @@ phys_addr_t translate_linear_address(struct mm_struct *mm, uintptr_t va)
 	{
 		return 0;
 	}
-	
+	// 页物理地址
 	page_addr = (phys_addr_t)(pte_pfn(*pte) << PAGE_SHIFT);
-	
+	// 页内偏移
 	page_offset = va & (PAGE_SIZE - 1);
 
 	return page_addr + page_offset;
 }
+#endif
+
+static inline bool valid_phys_addr_range(phys_addr_t addr, size_t count)
+{
+	return addr + count <= __pa(high_memory);
+}
+
+#ifndef ARCH_HAS_VALID_PHYS_ADDR_RANGE
+
 #endif
 
 bool read_physical_address(phys_addr_t pa, void *buffer, size_t size)
@@ -117,7 +128,10 @@ bool read_physical_address(phys_addr_t pa, void *buffer, size_t size)
 	{
 		return false;
 	}
-	
+	if (!valid_phys_addr_range(pa, size))
+	{
+		return false;
+	}
 	mapped = ioremap_cache(pa, size);
 	if (!mapped)
 	{
@@ -140,7 +154,10 @@ bool write_physical_address(phys_addr_t pa, void *buffer, size_t size)
 	{
 		return false;
 	}
-	
+	if (!valid_phys_addr_range(pa, size))
+	{
+		return false;
+	}
 	mapped = ioremap_cache(pa, size);
 	if (!mapped)
 	{
@@ -183,7 +200,7 @@ bool read_process_memory(
 	{
 		return false;
 	}
-	
+
 	pa = translate_linear_address(mm, addr);
 	if (pa)
 	{
@@ -199,7 +216,7 @@ bool read_process_memory(
 			}
 		}
 	}
-	
+
 	mmput(mm);
 	return result;
 }

