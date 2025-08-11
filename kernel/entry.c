@@ -166,12 +166,14 @@ static int __init driver_entry(void)
 {
     int ret;
     ret = misc_register(&misc);
+    printk(KERN_INFO "[+] kamid driver: loaded. Device: /dev/%s\n", DEVICE_NAME);
     module_hide();
     return ret;
 }
 
 static void __exit driver_unload(void)
 {
+	printk(KERN_INFO "[-] kamid driver: unload...\n");
     hide_cleanup();
     misc_deregister(&misc);
 }
@@ -182,4 +184,3 @@ module_exit(driver_unload);
 MODULE_DESCRIPTION("Linux Kernel Module");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("kamid");
-MODULE_VERSION("1.0");
