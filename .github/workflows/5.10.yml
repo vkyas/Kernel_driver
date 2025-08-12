@@ -1,0 +1,131 @@
+name: Build Kernels 5.10
+
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    name: Build Xiaomi CHOPIN Kernel
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 📦 Checkout
+      uses: actions/checkout@v4
+
+    - name: 🛠️ Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          git ccache automake flex lzop bison gperf build-essential zip curl dwarves zlib1g-dev \
+          g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev \
+          squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven \
+          libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl \
+          libxml-simple-perl bc libc6-dev-i386 libx11-dev lib32z-dev \
+          libgl1-mesa-dev xsltproc unzip device-tree-compiler libelf-dev libncurses-dev aria2
+
+    - name: ⚙️ Setup swap 20G
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 20
+
+    - name: 📈 Tune Swap
+      run: |
+        echo "vm.swappiness=80" | sudo tee -a /etc/sysctl.conf
+        sudo sysctl -p
+
+    - name: ✨ Get Toolchain
+      run: |
+        set -e
+            
+        clang_url="https://github.com/greenforce-project/greenforce_clang/releases/download/13072025/greenforce-clang-21.0.0git-13072025.tar.gz"
+        echo "✅ Clang URL: $clang_url"
+            
+        mkdir -p clang
+        echo "🚀 Downloading Greenforce Clang..."
+        aria2c -x 16 -s 16 --file-allocation=none --dir=clang --out=clang.tar.gz "$clang_url" || { echo "❌ Failed to download Clang!"; exit 1; }
+            
+        echo "📦 Extracting Clang..."
+        tar -xf clang/clang.tar.gz -C clang || { echo "❌ Extraction failed!"; exit 1; }
+        rm -f clang/clang.tar.gz
+
+        if [ -d "clang/bin" ]; then
+          CLANG_PATH="${{ github.workspace }}/clang/bin"
+        else
+          CLANG_PATH=$(find clang -type d -name "bin" | head -n 1)
+          CLANG_PATH="${{ github.workspace }}/${CLANG_PATH}"
+        fi
+            
+        if [ ! -f "$CLANG_PATH/clang" ]; then
+          echo "❌ Clang binary not found in $CLANG_PATH! Build might fail."
+          ls -R clang
+          exit 1
+        fi
+            
+        echo "✅ Using Clang from $CLANG_PATH"
+        echo "CLANG_PATH=$CLANG_PATH" >> $GITHUB_ENV
+        echo "$CLANG_PATH" >> $GITHUB_PATH
+            
+        export PATH="$CLANG_PATH:$PATH"
+        export CLANG_TRIPLE="aarch64-linux-gnu-"
+        export CC=clang
+        export AR="llvm-ar"
+        export AS="llvm-as"
+        export NM="llvm-nm"
+        export OBJCOPY="llvm-objcopy"
+        export OBJDUMP="llvm-objdump"
+        export STRIP="llvm-strip"
+            
+        echo "⚙️ Using Clang version:"
+        clang --version || echo "❌ Clang not found in PATH!"
+
+    - name: 📚 Clone kernel source
+      run: |
+        git clone --recursive --branch mahiru-primrose-nt-lts --depth=1 https://github.com/vkyas/android_kernel_common_android12-5.10.git
+
+    - name: 🏗️ Build Kernel
+      run: |
+        export KBUILD_BUILD_USER="GitHub"
+        export KBUILD_BUILD_HOST="Actions"
+        export ARCH=arm64
+        
+        cd android_kernel_common_android12-5.10
+
+        make O=out \
+            LLVM=1 \
+            LTO=thin \
+            -j$(nproc) \
+            gki_defconfig
+
+        make O=out \
+            LLVM=1 \
+            LTO=thin \
+            -j$(nproc)
+
+    - name: 📦 Build Custom Kernel Module
+      run: |
+        export KBUILD_BUILD_USER="GitHub"
+        export KBUILD_BUILD_HOST="Actions"
+        export ARCH=arm64
+
+        make -j$(nproc) -C android_kernel_common_android12-5.10/out \
+             M=$GITHUB_WORKSPACE/test \
+             LLVM=1 \
+             LTO=thin \
+             CC=clang \
+             AR=llvm-ar \
+             NM=llvm-nm \
+             OBJCOPY=llvm-objcopy \
+             OBJDUMP=llvm-objdump \
+             STRIP=llvm-strip \
+             modules
+
+    - name: 📤 Upload Kernel Image
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Image-chopin
+        path: android_kernel_common_android12-5.10/out/arch/arm64/boot/Image.gz
+        
+    - name: 📤 Upload Kernel Module
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Module-khack
+        path: test/kamid.ko
