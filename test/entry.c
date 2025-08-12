@@ -73,7 +73,10 @@ static long dispatch_ioctl(struct file* const file, unsigned int const cmd, unsi
     pid_t target_pid;
     int result = 0;
 
-    if (cmd == OP_INIT_KEY && !is_verified) {
+    if (cmd == OP_INIT_KEY) {
+        if (is_verified) {
+            return 0;
+        }
         if (copy_from_user(key, (void __user*)arg, sizeof(key)-1) != 0) {
             return -EFAULT;
         }
