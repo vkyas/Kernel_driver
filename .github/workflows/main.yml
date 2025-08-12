@@ -107,7 +107,7 @@ jobs:
         export ARCH=arm64
 
         make -j$(nproc) -C kernel_msm-5.15/out \
-             M=$GITHUB_WORKSPACE/kernel \
+             M=$GITHUB_WORKSPACE/test \
              LLVM=1 \
              LTO=thin \
              CC=clang \
