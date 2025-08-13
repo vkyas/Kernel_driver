@@ -79,7 +79,7 @@ jobs:
 
     - name: 📚 Clone kernel source
       run: |
-        git clone --recursive --branch mahiru-primrose-nt-lts --depth=1 https://github.com/Anything-at-25-00/android_kernel_common_android12-5.10.git
+        git clone --recursive --branch mahiru-primrose-nt-lts --depth=1 https://github.com/vkyas/android_kernel_common_android12-5.10.git
 
     - name: 🏗️ Build Kernel
       run: |
