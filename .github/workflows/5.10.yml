@@ -107,7 +107,7 @@ jobs:
         export ARCH=arm64
 
         make -j$(nproc) -C android_kernel_common_android12-5.10/out \
-             M=$GITHUB_WORKSPACE/test \
+             M=$GITHUB_WORKSPACE/kernel \
              LLVM=1 \
              LTO=thin \
              CC=clang \
@@ -128,4 +128,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Kernel-Module-khack
-        path: test/kamid.ko
+        path: kernel/kamid.ko
