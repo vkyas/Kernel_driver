@@ -1,4 +1,4 @@
-name: Build Kernel CI CHOPIN
+name: Build Kernels 5.15
 
 on:
   workflow_dispatch:
@@ -107,7 +107,7 @@ jobs:
         export ARCH=arm64
 
         make -j$(nproc) -C kernel_msm-5.15/out \
-             M=$GITHUB_WORKSPACE/test \
+             M=$GITHUB_WORKSPACE/kernel \
              LLVM=1 \
              LTO=thin \
              CC=clang \
@@ -127,5 +127,5 @@ jobs:
     - name: 📤 Upload Kernel Module
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-Module-khack
-        path: test/kamid.ko
+        name: Kernel-Module
+        path: kernel/kamid.ko
