@@ -1,5 +1,6 @@
 #include <linux/mm.h>
 #include <linux/sched.h>
+#include <linux/version.h>
 #include <linux/uaccess.h>
 #include <linux/highmem.h>
 #include <linux/mmap_lock.h>
@@ -8,11 +9,11 @@
 #include "memory.h"
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 5, 0)
-    #define KMAP(page) kmap_local_page(page)
-    #define KUNMAP(addr) kunmap_local(addr)
+  #define KMAP(page) kmap_local_page(page)
+  #define KUNMAP(addr) kunmap_local(addr)
 #else
-    #define KMAP(page) kmap_atomic(page)
-    #define KUNMAP(addr) kunmap_atomic(addr)
+  #define KMAP(page) kmap_atomic(page)
+  #define KUNMAP(addr) kunmap_atomic(addr)
 #endif
 
 bool read_process_memory(pid_t pid, uintptr_t addr, void *buffer, size_t size)
