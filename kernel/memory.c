@@ -1,6 +1,6 @@
+#include <linux/version.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
-#include <linux/version.h>
 #include <linux/uaccess.h>
 #include <linux/highmem.h>
 #include <linux/mmap_lock.h>
@@ -8,7 +8,7 @@
 #include <linux/sched/signal.h>
 #include "memory.h"
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 5, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
   #define KMAP(page) kmap_local_page(page)
   #define KUNMAP(addr) kunmap_local(addr)
 #else
@@ -46,11 +46,13 @@ bool read_process_memory(pid_t pid, uintptr_t addr, void *buffer, size_t size)
   }
 
   kaddr = KMAP(page);
-  if (copy_to_user(buffer, kaddr + offset, size) == 0) {
+  if (kaddr && copy_to_user(buffer, kaddr + offset, size) == 0) {
     result = true;
   }
 
-  KUNMAP(kaddr);
+  if (kaddr) {
+    KUNMAP(kaddr);
+  }
   unpin_user_page(page);
 
 unlock_and_release:
@@ -91,12 +93,14 @@ bool write_process_memory(pid_t pid, uintptr_t addr, void *buffer, size_t size)
   }
 
   kaddr = KMAP(page);
-  if (copy_from_user(kaddr + offset, buffer, size) == 0) {
+  if (kaddr && copy_from_user(kaddr + offset, buffer, size) == 0) {
     set_page_dirty(page);
     result = true;
   }
 
-  KUNMAP(kaddr);
+  if (kaddr) {
+    KUNMAP(kaddr);
+  }
   unpin_user_page(page);
 
 unlock_and_release_write:
